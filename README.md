@@ -6,7 +6,7 @@ An offline, high-performance candidate evaluation and ranking system tailored to
 
 ## 🔗 Project Links
 
-- **Live Deployed App (Railway)**: [Insert Deployed Railway URL Here]
+- **Live Deployed App (Railway)**: https://web-production-974dc.up.railway.app
 - **PPT Presentation Slide Deck**: [Redrob_Candidate_Ranker_Submission.pptx](./Redrob_Candidate_Ranker_Submission.pptx)
 - **Generated Output File**: [submission.csv](./submission.csv) (This file is generated automatically upon running the scoring engine)
 
