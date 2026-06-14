@@ -16,7 +16,7 @@ app = Flask(__name__, static_folder='.')
 
 # Allow uploads up to 500MB (for candidate datasets)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
-PORT = 5000
+PORT = int(os.environ.get('PORT', 5000))
 
 @app.route('/')
 def index():
