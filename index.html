@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Redrob Candidate Discoverer & Ranker</title>
+  
+  <!-- CDNs for React, Babel, Tailwind, jsPDF -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      background: radial-gradient(circle at top right, #0c0a09, #0c0a09 40%, #1e1b4b 100%);
+      color: #f4f4f5;
+    }
+    .font-outfit {
+      font-family: 'Outfit', sans-serif;
+    }
+    .glass-panel {
+      background: rgba(18, 18, 18, 0.7);
+      backdrop-filter: blur(14px);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      box-shadow: 0 4px 30px rgba(0, 0, 0, 0.25);
+    }
+    .accent-glow {
+      box-shadow: 0 0 20px rgba(99, 102, 241, 0.15);
+    }
+    .glow-border:focus {
+      outline: none;
+      border-color: rgba(99, 102, 241, 0.5);
+      box-shadow: 0 0 10px rgba(99, 102, 241, 0.15);
+    }
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(18, 18, 18, 0.2);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 4px;
+    }
+    @keyframes slideIn {
+      from {
+        transform: translateX(100%);
+      }
+      to {
+        transform: translateX(0);
+      }
+    }
+    .animate-slide-in {
+      animation: slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+  </style>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            outfit: ['Outfit', 'sans-serif'],
+          },
+          colors: {
+            zinc: {
+              950: '#09090b',
+            },
+            brand: {
+              50: '#eef2ff',
+              100: '#e0e7ff',
+              200: '#c7d2fe',
+              300: '#a5b4fc',
+              400: '#818cf8',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+              800: '#3730a3',
+              900: '#312e81',
+            }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="min-h-screen text-slate-100 flex flex-col antialiased">
+  
+  <div id="root" class="flex-grow flex flex-col"></div>
+
+  <!-- React JSX block -->
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    const PRESETS = {
+      senior_ai: `Job Title: Senior AI Engineer\nExperience Required: 5-9 Years\nLocation Preferred: Pune/Noida\n\nKey Mandate:\n- Own the intelligence layer of Redrob's product (ranking, retrieval, and matching systems).\n- Lead evaluation infrastructure (NDCG, MRR, MAP, offline-to-online correlation).\n- Production experience with dense/hybrid embeddings retrieval systems.\n- Familiarity with vector databases (Pinecone, Milvus, Qdrant).\n- No pure academic research or LangChain developers.`,
+      junior_swe: `Job Title: Junior Software Engineer\nExperience: 1-3 Years\nLocation: Flexible\nRequirements: Good Python, HTML/CSS, basic API integrations.`
+    };
+
+    const DEFAULT_LOCAL_PATH = `[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/candidates.jsonl`;
+
+    function App() {
+      const [jdText, setJdText] = useState(""); // EMPTY BY DEFAULT per request
+      const [sourceType, setSourceType] = useState("local"); // local, url, upload
+      const [datasetPath, setDatasetPath] = useState(DEFAULT_LOCAL_PATH);
+      const [datasetUrl, setDatasetUrl] = useState("");
+      const [selectedFile, setSelectedFile] = useState(null);
+      const [isLoading, setIsLoading] = useState(false);
+      const [candidates, setCandidates] = useState([]);
+      const [metrics, setMetrics] = useState(null);
+      const [searchQuery, setSearchQuery] = useState("");
+      const [error, setError] = useState(null);
+      const [selectedCandidate, setSelectedCandidate] = useState(null);
+
+      const handlePresetClick = (key) => {
+        setJdText(PRESETS[key]);
+      };
+
+      const handleFileChange = (e) => {
+        if (e.target.files && e.target.files.length > 0) {
+          setSelectedFile(e.target.files[0]);
+        }
+      };
+
+      const executeRanking = async () => {
+        if (!jdText.trim()) {
+          setError("Please provide a Job Description (type or use a template).");
+          return;
+        }
+        
+        setError(null);
+        setIsLoading(true);
+        setCandidates([]);
+        setMetrics(null);
+        setSelectedCandidate(null);
+
+        const formData = new FormData();
+        formData.append("job_description", jdText);
+        formData.append("source_type", sourceType);
+
+        if (sourceType === "local") {
+          formData.append("dataset_path", datasetPath);
+        } else if (sourceType === "url") {
+          if (!datasetUrl.trim()) {
+            setError("Please enter a valid dataset download URL link.");
+            setIsLoading(false);
+            return;
+          }
+          formData.append("dataset_url", datasetUrl);
+        } else if (sourceType === "upload") {
+          if (!selectedFile) {
+            setError("Please select a JSONL candidate database file from your computer.");
+            setIsLoading(false);
+            return;
+          }
+          formData.append("file", selectedFile);
+        }
+
+        try {
+          const response = await fetch("/api/rank", {
+            method: "POST",
+            body: formData
+          });
+
+          const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.error || "An error occurred during computing.");
+          }
+
+          setCandidates(data.candidates || []);
+          setMetrics(data.metrics || null);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      const downloadPDF = () => {
+        if (candidates.length === 0) return;
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF('l', 'mm', 'a4'); // Landscape A4 orientation
+
+        // Styling theme headers
+        doc.setFont("Helvetica", "bold");
+        doc.setFontSize(20);
+        doc.setTextColor(30, 27, 75); // Dark Indigo
+        doc.text("Redrob Candidate Discovery & Ranking Report", 14, 20);
+
+        doc.setFontSize(10);
+        doc.setFont("Helvetica", "normal");
+        doc.setTextColor(100, 116, 139); // Slate Gray
+        doc.text(`Report Date: ${new Date().toLocaleDateString()} | Target Reference: 2026-06-07`, 14, 27);
+        doc.text(`Dataset Details: Evaluated ${metrics?.total_candidates.toLocaleString()} candidates | Honeypots filtered: ${metrics?.honeypots} | Compute time: ${metrics?.elapsed_time}s`, 14, 32);
+
+        // Prep columns
+        const columns = [
+          { header: 'Rank', dataKey: 'rank' },
+          { header: 'ID', dataKey: 'candidate_id' },
+          { header: 'Score', dataKey: 'score' },
+          { header: 'Current Title', dataKey: 'current_title' },
+          { header: 'YoE', dataKey: 'years_of_experience' },
+          { header: 'Location', dataKey: 'location' },
+          { header: 'Reasoning (1-2 sentences justification based on profile data)', dataKey: 'reasoning' }
+        ];
+
+        // Format rows
+        const rows = candidates.map(c => ({
+          rank: c.rank,
+          candidate_id: c.candidate_id,
+          score: c.score.toFixed(6),
+          current_title: c.current_title,
+          years_of_experience: `${c.years_of_experience} yrs`,
+          location: c.location,
+          reasoning: c.reasoning
+        }));
+
+        // Render Table
+        doc.autoTable({
+          columns: columns,
+          body: rows,
+          startY: 38,
+          theme: 'striped',
+          styles: {
+            fontSize: 8,
+            cellPadding: 2.5,
+            overflow: 'linebreak',
+            font: 'Helvetica'
+          },
+          headStyles: {
+            fillColor: [79, 70, 229], // Indigo 600
+            textColor: 255,
+            fontSize: 9,
+            fontStyle: 'bold'
+          },
+          columnStyles: {
+            reasoning: { cellWidth: 100 }
+          }
+        });
+
+        doc.save(`Redrob_Candidate_Discoverer_Report_${new Date().toISOString().slice(0, 10)}.pdf`);
+      };
+
+      const filteredCandidates = candidates.filter(c => {
+        const query = searchQuery.toLowerCase();
+        return (
+          c.candidate_id.toLowerCase().includes(query) ||
+          c.current_title.toLowerCase().includes(query) ||
+          c.location.toLowerCase().includes(query)
+        );
+      });
+
+      return (
+        <div class="h-screen flex flex-col overflow-hidden">
+          
+          {/* Dashboard Premium Navigation Bar */}
+          <header class="border-b border-white/5 py-4 px-8 flex items-center justify-between glass-panel z-10">
+            <div class="flex items-center space-x-3">
+              <div class="bg-indigo-600 p-2 rounded-xl text-white font-bold text-lg font-outfit shadow-md shadow-indigo-600/20">
+                RR
+              </div>
+              <div>
+                <h1 class="text-xl font-bold font-outfit tracking-wide text-white flex items-center">
+                  Redrob Candidate Discoverer & Ranker
+                </h1>
+                <p class="text-xs text-slate-400">Rule-based scoring, behavioral multi-pliers, and honeypot catchers</p>
+              </div>
+            </div>
+            <div class="flex items-center space-x-4">
+              <span class="text-xs text-slate-400 bg-white/5 px-3.5 py-1 rounded-full border border-white/5 flex items-center">
+                <span class="w-2.5 h-2.5 rounded-full bg-indigo-500 mr-2.5 animate-pulse"></span>
+                Engine Ready
+              </span>
+            </div>
+          </header>
+
+          {/* Main Dashboard Layout */}
+          <div class="flex-grow grid grid-cols-12 gap-6 p-6 min-h-0 overflow-hidden">
+            
+            {/* Left Column: Form Controls (Input Card) */}
+            <div class="col-span-4 flex flex-col space-y-6 overflow-y-auto pr-2">
+              
+              {/* Card 1: Job Description Box */}
+              <div class="glass-panel rounded-2xl p-5 flex flex-col space-y-4">
+                <div class="flex justify-between items-center">
+                  <h2 class="text-sm font-bold font-outfit uppercase tracking-wider text-indigo-400">1. Job Description</h2>
+                  <div class="flex space-x-2">
+                    <button 
+                      onClick={() => handlePresetClick("senior_ai")}
+                      class="text-[10px] bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-300 px-2 py-0.5 rounded border border-indigo-500/10 transition"
+                    >
+                      Senior AI Presets
+                    </button>
+                    <button 
+                      onClick={() => handlePresetClick("junior_swe")}
+                      class="text-[10px] bg-white/5 hover:bg-white/10 text-slate-300 px-2 py-0.5 rounded border border-white/5 transition"
+                    >
+                      Junior SWE Presets
+                    </button>
+                  </div>
+                </div>
+                
+                <textarea 
+                  value={jdText}
+                  onChange={(e) => setJdText(e.target.value)}
+                  placeholder="Paste Job Description metrics here... (e.g. Job Title: Senior AI Engineer, Experience: 5-9 Years, preferred skills: dense retrieval, embeddings, vector databases)"
+                  class="w-full h-44 p-3 bg-black/40 border border-white/10 rounded-xl text-sm text-slate-200 placeholder-slate-600 focus:border-indigo-500/40 glow-border resize-none"
+                />
+              </div>
+
+              {/* Card 2: Dataset Configuration (TABS) */}
+              <div class="glass-panel rounded-2xl p-5 flex flex-col space-y-4">
+                <h2 class="text-sm font-bold font-outfit uppercase tracking-wider text-indigo-400">2. Dataset Source</h2>
+                
+                {/* Tabs selection */}
+                <div class="grid grid-cols-3 gap-2 bg-black/40 p-1 rounded-xl border border-white/5">
+                  <button 
+                    onClick={() => setSourceType("local")}
+                    class={`py-1.5 rounded-lg text-xs font-medium transition ${sourceType === 'local' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                  >
+                    Local Path
+                  </button>
+                  <button 
+                    onClick={() => setSourceType("url")}
+                    class={`py-1.5 rounded-lg text-xs font-medium transition ${sourceType === 'url' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                  >
+                    Online Link
+                  </button>
+                  <button 
+                    onClick={() => setSourceType("upload")}
+                    class={`py-1.5 rounded-lg text-xs font-medium transition ${sourceType === 'upload' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                  >
+                    File Upload
+                  </button>
+                </div>
+
+                {/* Local path interface */}
+                {sourceType === 'local' && (
+                  <div class="space-y-2">
+                    <label class="block text-[11px] font-semibold text-slate-400">Workspace Path to Candidates file</label>
+                    <input 
+                      type="text"
+                      value={datasetPath}
+                      onChange={(e) => setDatasetPath(e.target.value)}
+                      placeholder="e.g. candidates.jsonl"
+                      class="w-full p-2.5 bg-black/40 border border-white/10 rounded-xl text-sm text-slate-200 focus:border-indigo-500/40 glow-border"
+                    />
+                  </div>
+                )}
+
+                {/* Online Link interface */}
+                {sourceType === 'url' && (
+                  <div class="space-y-2">
+                    <label class="block text-[11px] font-semibold text-slate-400">Paste Dataset URL link (.jsonl or .jsonl.gz)</label>
+                    <input 
+                      type="text"
+                      value={datasetUrl}
+                      onChange={(e) => setDatasetUrl(e.target.value)}
+                      placeholder="https://example.com/dataset.jsonl.gz"
+                      class="w-full p-2.5 bg-black/40 border border-white/10 rounded-xl text-sm text-slate-200 focus:border-indigo-500/40 glow-border"
+                    />
+                  </div>
+                )}
+
+                {/* File Upload interface */}
+                {sourceType === 'upload' && (
+                  <div class="space-y-2">
+                    <label class="block text-[11px] font-semibold text-slate-400">Upload candidate pool</label>
+                    <div class="border-2 border-dashed border-white/10 hover:border-indigo-500/30 rounded-xl p-4 flex flex-col items-center justify-center text-center cursor-pointer bg-black/20 hover:bg-black/30 transition relative">
+                      <input 
+                        type="file" 
+                        accept=".jsonl,.gz"
+                        onChange={handleFileChange}
+                        class="absolute inset-0 opacity-0 cursor-pointer"
+                      />
+                      <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-slate-500 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                      </svg>
+                      {selectedFile ? (
+                        <div>
+                          <p class="text-xs font-semibold text-emerald-400 truncate max-w-[200px]">{selectedFile.name}</p>
+                          <p class="text-[10px] text-slate-500 mt-0.5">{(selectedFile.size / (1024 * 1024)).toFixed(2)} MB</p>
+                        </div>
+                      ) : (
+                        <div>
+                          <p class="text-xs font-semibold text-slate-300">Choose JSONL or GZ file</p>
+                          <p class="text-[10px] text-slate-500 mt-0.5">Drag & drop or browse</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Primary Button */}
+                <button 
+                  onClick={executeRanking}
+                  disabled={isLoading}
+                  class={`w-full py-3 rounded-xl font-bold font-outfit transition flex items-center justify-center space-x-2 mt-4 shadow-md ${
+                    isLoading 
+                      ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
+                      : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/10'
+                  }`}
+                >
+                  {isLoading ? (
+                    <>
+                      <svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      <span>Ranking Candidates Pool...</span>
+                    </>
+                  ) : (
+                    <>
+                      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                      <span>Compute Top 100 Matches</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+            </div>
+
+            {/* Right Column: Results Console (Main Card Dashboard) */}
+            <div class="col-span-8 flex flex-col h-full overflow-hidden">
+              
+              {error && (
+                <div class="mb-4 p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs flex items-center space-x-2">
+                  <span class="font-bold">Error:</span>
+                  <span>{error}</span>
+                </div>
+              )}
+
+              {/* Welcome/Empty state */}
+              {!metrics && !isLoading && (
+                <div class="flex-grow flex flex-col items-center justify-center text-slate-500 space-y-4 py-20 bg-black/10 border border-white/5 rounded-2xl">
+                  <div class="text-center">
+                    <p class="text-base font-semibold font-outfit text-slate-400">Discoverer Deck is Empty</p>
+                    <p class="text-xs text-slate-600 mt-1 max-w-sm">Provide details in the left console to trigger the scoring engine. You can select your local candidates pool, fetch from URL, or upload a dataset.</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Loader overlay */}
+              {isLoading && (
+                <div class="flex-grow flex flex-col items-center justify-center py-20 bg-black/10 border border-white/5 rounded-2xl">
+                  <div class="relative w-16 h-16 mb-4">
+                    <div class="absolute inset-0 rounded-full border-4 border-indigo-500/10"></div>
+                    <div class="absolute inset-0 rounded-full border-4 border-t-indigo-500 animate-spin"></div>
+                  </div>
+                  <p class="text-base font-semibold font-outfit text-indigo-400">Running Multiprocessing Scorers</p>
+                  <p class="text-[11px] text-slate-500 mt-1 max-w-xs text-center">Parsing streaming candidates database, filtering honeypots, and calculating composite ranks...</p>
+                </div>
+              )}
+
+              {/* Data Dashboard */}
+              {metrics && !isLoading && (
+                <div class="flex-grow flex flex-col space-y-5 min-h-0 overflow-hidden">
+                  
+                  {/* Dashboard Metrics grid */}
+                  <div class="grid grid-cols-5 gap-4">
+                    <div class="glass-panel rounded-2xl p-4 flex flex-col bg-zinc-900/40">
+                      <span class="text-[9px] uppercase tracking-wider font-semibold text-slate-500">Total Pool</span>
+                      <span class="text-xl font-bold font-outfit text-white mt-1">{metrics.total_candidates.toLocaleString()}</span>
+                    </div>
+                    <div class="glass-panel rounded-2xl p-4 flex flex-col bg-zinc-900/40">
+                      <span class="text-[9px] uppercase tracking-wider font-semibold text-slate-500">Honeypots Caught</span>
+                      <span class="text-xl font-bold font-outfit text-rose-400 mt-1">{metrics.honeypots}</span>
+                    </div>
+                    <div class="glass-panel rounded-2xl p-4 flex flex-col bg-zinc-900/40">
+                      <span class="text-[9px] uppercase tracking-wider font-semibold text-slate-500">Compute Time</span>
+                      <span class="text-xl font-bold font-outfit text-emerald-400 mt-1">{metrics.elapsed_time}s</span>
+                    </div>
+                    <div class="glass-panel rounded-2xl p-4 flex flex-col bg-zinc-900/40">
+                      <span class="text-[9px] uppercase tracking-wider font-semibold text-slate-500">Median Score</span>
+                      <span class="text-xl font-bold font-outfit text-indigo-400 mt-1">{metrics.distribution.median.toFixed(4)}</span>
+                    </div>
+                    <div class="glass-panel rounded-2xl p-4 flex flex-col bg-zinc-900/40">
+                      <span class="text-[9px] uppercase tracking-wider font-semibold text-slate-500">Max Score</span>
+                      <span class="text-xl font-bold font-outfit text-violet-400 mt-1">{metrics.distribution.max.toFixed(4)}</span>
+                    </div>
+                  </div>
+
+                  {/* Visual Analytics Container */}
+                  <div class="grid grid-cols-2 gap-4">
+                    {/* Chart 1: Notice Period Distribution */}
+                    <div class="glass-panel rounded-2xl p-4 flex flex-col bg-zinc-900/30">
+                      <h3 class="text-xs font-bold font-outfit uppercase tracking-wider text-indigo-400 mb-3">Notice Period Distribution (Top 100)</h3>
+                      <div class="space-y-2.5">
+                        {(() => {
+                          const noticeStats = { "Immediate (≤15d)": 0, "Short (30d)": 0, "Standard (60d)": 0, "Long (90d+)": 0 };
+                          candidates.forEach(c => {
+                            const np = c.redrob_signals?.notice_period_days || 0;
+                            if (np <= 15) noticeStats["Immediate (≤15d)"] += 1;
+                            else if (np <= 30) noticeStats["Short (30d)"] += 1;
+                            else if (np <= 60) noticeStats["Standard (60d)"] += 1;
+                            else noticeStats["Long (90d+)"] += 1;
+                          });
+                          
+                          const maxCount = Math.max(...Object.values(noticeStats), 1);
+                          return Object.entries(noticeStats).map(([label, count]) => {
+                            const percent = (count / maxCount) * 100;
+                            return (
+                              <div key={label} class="flex items-center space-x-3">
+                                <span class="text-[11px] text-slate-400 w-28 text-left truncate">{label}</span>
+                                <div class="flex-grow h-2 bg-black/40 rounded-full overflow-hidden">
+                                  <div class="bg-indigo-500 h-full rounded-full transition-all duration-500" style={{ width: `${percent}%` }}></div>
+                                </div>
+                                <span class="text-[11px] font-bold text-slate-200 w-8 text-right">{count}</span>
+                              </div>
+                            );
+                          });
+                        })()}
+                      </div>
+                    </div>
+
+                    {/* Chart 2: Location Demographics */}
+                    <div class="glass-panel rounded-2xl p-4 flex flex-col bg-zinc-900/30">
+                      <h3 class="text-xs font-bold font-outfit uppercase tracking-wider text-indigo-400 mb-3">Top Talent Hubs (Top 100)</h3>
+                      <div class="space-y-2.5">
+                        {(() => {
+                          const locationCounts = {};
+                          candidates.forEach(c => {
+                            let loc = c.location || "Unknown";
+                            const l = loc.toLowerCase();
+                            let cleanLoc = "Other";
+                            if (l.includes("noida") || l.includes("delhi") || l.includes("gurgaon") || l.includes("ncr")) cleanLoc = "Delhi NCR";
+                            else if (l.includes("pune")) cleanLoc = "Pune";
+                            else if (l.includes("hyderabad")) cleanLoc = "Hyderabad";
+                            else if (l.includes("bangalore") || l.includes("bengaluru")) cleanLoc = "Bangalore";
+                            else if (l.includes("mumbai")) cleanLoc = "Mumbai";
+                            else if (l.includes("chennai")) cleanLoc = "Chennai";
+                            
+                            locationCounts[cleanLoc] = (locationCounts[cleanLoc] || 0) + 1;
+                          });
+                          
+                          const maxCount = Math.max(...Object.values(locationCounts), 1);
+                          const sortedLocs = Object.entries(locationCounts).sort((a, b) => b[1] - a[1]).slice(0, 4);
+                          return sortedLocs.map(([label, count]) => {
+                            const percent = (count / maxCount) * 100;
+                            return (
+                              <div key={label} class="flex items-center space-x-3">
+                                <span class="text-[11px] text-slate-400 w-28 text-left truncate">{label}</span>
+                                <div class="flex-grow h-2 bg-black/40 rounded-full overflow-hidden">
+                                  <div class="bg-emerald-500 h-full rounded-full transition-all duration-500" style={{ width: `${percent}%` }}></div>
+                                </div>
+                                <span class="text-[11px] font-bold text-slate-200 w-8 text-right">{count}</span>
+                              </div>
+                            );
+                          });
+                        })()}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions Header Bar */}
+                  <div class="flex justify-between items-center bg-zinc-900/30 border border-white/5 rounded-2xl p-3.5">
+                    <div class="flex-grow max-w-sm relative">
+                      <svg xmlns="http://www.w3.org/2000/svg" class="h-4.5 w-4.5 absolute left-3 top-3 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                      <input 
+                        type="text" 
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="Search top 100 matches..."
+                        class="w-full bg-black/40 border border-white/10 rounded-xl pl-10 pr-4 py-2 text-xs glow-border"
+                      />
+                    </div>
+                    
+                    <button 
+                      onClick={downloadPDF}
+                      class="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-xl text-xs font-bold font-outfit flex items-center space-x-2 transition shadow"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      <span>Download PDF Report Table</span>
+                    </button>
+                  </div>
+
+                  {/* Results Candidates Table */}
+                  <div class="glass-panel rounded-2xl overflow-hidden flex-grow flex flex-col min-h-0">
+                    <div class="overflow-y-auto flex-grow">
+                      <table class="w-full text-left border-collapse table-fixed">
+                        <thead>
+                          <tr class="bg-white/5 border-b border-white/10 text-[10px] uppercase tracking-wider text-slate-400 font-semibold sticky top-0 z-10 glass-panel">
+                            <th class="py-3 px-4 text-center w-14">Rank</th>
+                            <th class="py-3 px-4 w-28">ID</th>
+                            <th class="py-3 px-4 w-20">Score</th>
+                            <th class="py-3 px-4 w-44">Current Title</th>
+                            <th class="py-3 px-4 w-16">YoE</th>
+                            <th class="py-3 px-4 w-36">Location</th>
+                            <th class="py-3 px-4 w-96">Reasoning Justification</th>
+                          </tr>
+                        </thead>
+                        <tbody class="divide-y divide-white/5 text-xs text-slate-300">
+                          {filteredCandidates.map((c) => (
+                            <tr key={c.candidate_id} class="hover:bg-white/5 transition">
+                              <td class="py-3.5 px-4 text-center font-bold text-indigo-400">{c.rank}</td>
+                              <td class="py-3.5 px-4 font-mono font-medium text-slate-200">{c.candidate_id}</td>
+                              <td class="py-3.5 px-4 text-emerald-400 font-semibold">{c.score.toFixed(6)}</td>
+                              <td class="py-3.5 px-4 text-slate-200 truncate" title={c.current_title}>{c.current_title}</td>
+                              <td class="py-3.5 px-4">{c.years_of_experience} yrs</td>
+                              <td class="py-3.5 px-4 text-slate-400 truncate" title={c.location}>{c.location}</td>
+                              <td class="py-3.5 px-4 leading-relaxed text-slate-400">{c.reasoning}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+            </div>
+          </div>
+
+
+
+        </div>
+      );
+    }
+
+    const container = document.getElementById('root');
+    const root = ReactDOM.createRoot(container);
+    root.render(<App />);
+  </script>
+</body>
+</html>

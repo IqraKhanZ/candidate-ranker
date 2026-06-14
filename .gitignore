@@ -1,0 +1,22 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+
+# Virtual environments and dependencies
+venv/
+env/
+.env
+node_modules/
+package-lock.json
+
+# Large dataset files and outputs
+*.csv
+*.jsonl
+*.jsonl.gz
+temp_*
